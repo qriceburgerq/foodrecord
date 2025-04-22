@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>食物熱量計算器 (優化最近新增與單位)</title> <script src="https://unpkg.com/dexie@latest/dist/dexie.js"></script>
+    <title>食物熱量計算器 (修正重複宣告錯誤)</title> <script src="https://unpkg.com/dexie@latest/dist/dexie.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/jf-openhuninn-1.1/font.min.css' />
     <style>
@@ -419,6 +419,7 @@
         const recentFoodsSection = document.getElementById('recentFoodsSection');
         const recentFoodsListUl = document.getElementById('recentFoodsList');
 
+
         // --- 狀態變數 ---
         let dailyTargetCalories = 0;
         let dailyTargetCarbs = 0;
@@ -432,14 +433,70 @@
         let manageSearchDebounceTimer;
 
         // --- 初始化 ---
-        async function initialize() { /* ... (與之前相同) ... */ }
+        async function initialize() {
+            const today = new Date().toISOString().split('T')[0];
+            recordDateInput.value = today;
+            selectedDate = today;
+
+            try {
+                await db.open();
+                await initializeFoodDatabase();
+                await loadUserSettings();
+                await loadAndRenderDayLog(selectedDate);
+                renderRecentFoodsList();
+            } catch (error) {
+                 console.error("資料庫初始化失敗:", error);
+                 showMessage("應用程式初始化失敗。", "error");
+            }
+
+            // 事件監聽器
+            dailyCaloriesTargetInput.addEventListener('change', handleDailyTargetChange);
+            dailyCarbsTargetInput.addEventListener('change', handleDailyTargetChange);
+            dailyFatTargetInput.addEventListener('change', handleDailyTargetChange);
+            dailyProteinTargetInput.addEventListener('change', handleDailyTargetChange);
+            addFoodToDbBtn.addEventListener('click', handleAddFoodToDatabase);
+            cancelAddFoodBtn.addEventListener('click', hideAddFoodSection);
+            searchResultsUl.addEventListener('click', handleSearchResultClick);
+            foodSearchInput.addEventListener('input', handleFoodSearch);
+            foodSearchInput.addEventListener('blur', () => setTimeout(() => {
+                 if (!searchResultsUl.querySelector('.add-new-food-option') || searchResultsUl.children.length > 1) {
+                      searchResultsUl.innerHTML = '';
+                 }
+            }, 200));
+            addFoodLogBtn.addEventListener('click', handleAddFoodLog); // 確認事件綁定
+            recordDateInput.addEventListener('change', handleDateChange);
+            // 資料管理相關 (使用 debounce)
+            manageFoodSearchInput.addEventListener('input', handleManageFoodSearchInput); // 改為觸發 debounce 的函式
+            manageSearchResultsUl.addEventListener('click', handleManageResultClick);
+            updateFoodDbBtn.addEventListener('click', handleUpdateFoodDb);
+            deleteFoodDbBtn.addEventListener('click', handleDeleteFoodDb);
+            cancelEditFoodBtn.addEventListener('click', hideManageFoodEditSection);
+            // 匯出/匯入
+            exportFoodDbBtn.addEventListener('click', handleExportFoodDb);
+            exportLogBtn.addEventListener('click', handleExportLog);
+            importFoodDbFileInput.addEventListener('change', (e) => handleImportData(e, 'foodsOnly'));
+            importLogFileInput.addEventListener('change', (e) => handleImportData(e, 'logsOnly'));
+            // 飲食紀錄與最近新增
+            mealLogDiv.addEventListener('click', handleDeleteLogEntry);
+            toggleRecentFoodsBtn.addEventListener('click', toggleRecentFoodsSection);
+            recentFoodsListUl.addEventListener('click', handleRecentFoodClick);
+        }
 
         // --- Debounce 輔助函式 ---
-        function debounce(func, delay) { /* ... (與之前相同) ... */ }
+        function debounce(func, delay) {
+          let timeoutId;
+          return function(...args) {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+              func.apply(this, args);
+            }, delay);
+          };
+        }
+
 
         // --- 資料庫初始化與載入 ---
         async function initializeFoodDatabase() { /* ... */ }
-        async function loadUserSettings() { /* ... (已修改) ... */ }
+        async function loadUserSettings() { /* ... */ }
         async function loadAndRenderDayLog(date) { /* ... */ }
 
         // --- 顯示/隱藏 區塊 ---
@@ -450,127 +507,26 @@
         function toggleRecentFoodsSection() { /* ... */ }
 
         // --- 最近新增食物處理 (修改) ---
-        function getRecentFoods() {
-            const recent = localStorage.getItem('recentFoods');
-            // 解析時提供預設空陣列以防 JSON 解析錯誤
-            try {
-                return recent ? JSON.parse(recent) : [];
-            } catch (e) {
-                console.error("解析最近食物列表失敗:", e);
-                localStorage.removeItem('recentFoods'); // 清除損壞的資料
-                return [];
-            }
-        }
-
-        // 修改：儲存物件 {name, quantity}
-        function addRecentFood(foodName, quantity) {
-            let recent = getRecentFoods();
-            // 移除已存在的同名項目
-            recent = recent.filter(item => item.name !== foodName);
-            // 新增項目到最前面
-            recent.unshift({ name: foodName, quantity: quantity });
-            // 限制列表長度
-            if (recent.length > MAX_RECENT_FOODS) {
-                recent = recent.slice(0, MAX_RECENT_FOODS);
-            }
-            localStorage.setItem('recentFoods', JSON.stringify(recent));
-            // 如果列表是顯示的，立即更新
-            if (recentFoodsSection.style.display === 'block') {
-                 renderRecentFoodsList();
-            }
-        }
-
-        // 修改：渲染最近新增列表，顯示名稱，儲存名稱和數量
-        function renderRecentFoodsList() {
-            const recent = getRecentFoods();
-            recentFoodsListUl.innerHTML = '';
-            if (recent.length === 0) {
-                recentFoodsListUl.innerHTML = '<li class="p-2 text-gray-500 dark:text-gray-400">尚無最近紀錄</li>';
-            } else {
-                recent.forEach(item => {
-                    const li = document.createElement('li');
-                    li.textContent = item.name; // 只顯示名稱
-                    li.className = 'p-2 border-b last:border-b-0 dark:text-gray-200 recent-food-item';
-                    li.dataset.name = item.name; // 儲存名稱
-                    li.dataset.quantity = item.quantity; // *** 儲存數量 ***
-                    recentFoodsListUl.appendChild(li);
-                });
-            }
-        }
-
-        // 修改：處理最近新增列表點擊，讀取數量並填入
-        async function handleRecentFoodClick(event) {
-            const targetLi = event.target.closest('li.recent-food-item');
-            if (!targetLi) return;
-
-            const foodName = targetLi.dataset.name;
-            const lastQuantity = targetLi.dataset.quantity; // *** 讀取數量 ***
-
-            if (foodName) {
-                console.log("選擇最近新增:", foodName, "上次數量:", lastQuantity);
-                foodSearchInput.value = foodName;
-                searchResultsUl.innerHTML = '';
-                // *** 設定數量輸入框的值 ***
-                if (lastQuantity && !isNaN(parseFloat(lastQuantity))) {
-                    foodQuantityInput.value = parseFloat(lastQuantity);
-                } else {
-                    foodQuantityInput.value = 100; // 如果沒有有效數量，預設 100
-                }
-
-                try {
-                    const food = await db.foods.get(foodName);
-                    if (food) {
-                        selectFood(food);
-                    } else {
-                         showMessage(`在資料庫中找不到最近紀錄的食物 "${foodName}"，可能已被刪除。`, "error");
-                    }
-                } catch(error) {
-                    console.error("查找最近食物時出錯:", error);
-                    showMessage("選擇最近食物時發生錯誤", "error");
-                }
-            }
-        }
-
+        function getRecentFoods() { /* ... */ }
+        function addRecentFood(foodName, quantity) { /* ... */ } // 已修改
+        function renderRecentFoodsList() { /* ... */ } // 已修改
+        async function handleRecentFoodClick(event) { /* ... */ } // 已修改
 
         // --- 事件處理函式 ---
         async function handleDailyTargetChange(event) { /* ... */ }
         async function handleAddFoodToDatabase() { /* ... */ }
         async function handleFoodSearch() { /* ... */ }
         function handleSearchResultClick(event) { /* ... */ }
-        function selectFood(food) { /* ... (Debug log 已加入) ... */ }
-
-        // 修改：新增紀錄時傳遞 quantity 給 addRecentFood
-        async function handleAddFoodLog() {
-            console.log("[DEBUG] handleAddFoodLog called. selectedFood:", selectedFood);
-            if (!selectedFood) { console.error("handleAddFoodLog: selectedFood is null or undefined."); showMessage("請先搜尋並選擇一個食物", "error"); return; }
-            const quantity = parseFloat(foodQuantityInput.value); console.log("[DEBUG] handleAddFoodLog: quantity:", quantity);
-            if (isNaN(quantity) || quantity <= 0) { console.error("handleAddFoodLog: Invalid quantity."); showMessage("請輸入有效的份量/重量", "error"); return; }
-            const mealType = mealTypeSelect.value; const baseNutrients = selectedFood; const factor = quantity / 100;
-            const calculatedNutrients = {
-                calories: parseFloat(((baseNutrients.calories ?? 0) * factor).toFixed(1)), carbs: parseFloat(((baseNutrients.carbs ?? 0) * factor).toFixed(1)),
-                fat: parseFloat(((baseNutrients.fat ?? 0) * factor).toFixed(1)), protein: parseFloat(((baseNutrients.protein ?? 0) * factor).toFixed(1)),
-                sodium: parseFloat(((baseNutrients.sodium ?? 0) * factor).toFixed(1)), sugar: parseFloat(((baseNutrients.sugar ?? 0) * factor).toFixed(1))
-            };
-            for (const key in calculatedNutrients) { if (isNaN(calculatedNutrients[key])) { console.warn(`[DEBUG] Nutrient calculation resulted in NaN for ${key}. Defaulting to 0.`); calculatedNutrients[key] = 0; } }
-            const logEntryData = { name: baseNutrients.name, quantity: quantity, nutrients: calculatedNutrients };
-            const entryToSave = { date: selectedDate, mealType: mealType, logData: logEntryData }; console.log("[DEBUG] handleAddFoodLog: entryToSave:", entryToSave);
-            try {
-                console.log("[DEBUG] handleAddFoodLog: Attempting to add to logEntries..."); await db.logEntries.add(entryToSave);
-                console.log("[DEBUG] handleAddFoodLog: Added successfully. Adding to recent foods...");
-                addRecentFood(logEntryData.name, logEntryData.quantity); // *** 傳遞 quantity ***
-                console.log("[DEBUG] handleAddFoodLog: Reloading day log..."); await loadAndRenderDayLog(selectedDate);
-                console.log("[DEBUG] handleAddFoodLog: Resetting fields..."); foodSearchInput.value = ''; selectedFood = null; addFoodLogBtn.disabled = true; selectedFoodInfoP.textContent = '請先搜尋並選擇食物'; selectedFoodInfoP.classList.add('italic'); foodQuantityInput.value = 100; showMessage(`${logEntryData.name} 已新增至 ${getMealTypeName(mealType)}`, "success"); console.log("[DEBUG] handleAddFoodLog: Completed successfully.");
-            }
-            catch (error) { console.error("新增飲食紀錄失敗 (handleAddFoodLog catch):", error); showMessage("新增紀錄失敗", "error"); }
-        }
-
+        function selectFood(food) { /* ... */ }
+        async function handleAddFoodLog() { /* ... */ } // 已修改處理缺失營養素 & 最近新增
         async function handleDateChange() { /* ... */ }
         async function handleDeleteLogEntry(event) { /* ... */ }
 
-        // --- 食物資料庫管理函式 ---
-        async function handleManageFoodSearchInput() { /* ... */ }
-        async function performManageFoodSearch() { /* ... */ }
-        const debouncedManageFoodSearch = debounce(performManageFoodSearch, 300);
+        // --- 食物資料庫管理函式 (修改搜尋方式) ---
+        async function performManageFoodSearch() { /* ... */ } // 實際搜尋邏輯
+        // *** 移除重複宣告 ***
+        // const debouncedManageFoodSearch = debounce(performManageFoodSearch, 300);
+        function handleManageFoodSearchInput() { debouncedManageFoodSearch(); } // 觸發 debounce
         function handleManageResultClick(event) { /* ... */ }
         async function handleUpdateFoodDb() { /* ... */ }
         async function handleDeleteFoodDb() { /* ... */ }
@@ -579,77 +535,19 @@
         function triggerDownload(data, filename) { /* ... */ }
         async function handleExportFoodDb() { /* ... */ }
         async function handleExportLog() { /* ... */ }
-        async function handleImportData(event, importMode) { /* ... */ }
+        async function handleImportData(event, importMode) { /* ... */ } // 已修改處理兩種食物格式
 
         // --- 畫面更新 ---
         function updateDailySummary() { /* ... (已修改) ... */ }
-
-        // 修改：渲染餐點紀錄，統一單位為 "克"
-        function renderMealLog() {
-            mealLogDiv.innerHTML = '';
-            if (!currentDayLogEntries || currentDayLogEntries.length === 0) {
-                mealLogDiv.innerHTML = '<p class="text-gray-500 dark:text-gray-400 text-center">當日尚無紀錄</p>';
-                return;
-            }
-            const groupedLogs = currentDayLogEntries.reduce((acc, log) => {
-                const meal = log.mealType || 'snack';
-                if (!acc[meal]) acc[meal] = [];
-                acc[meal].push(log);
-                return acc;
-            }, {});
-            const mealOrder = ['breakfast', 'lunch', 'dinner', 'snack'];
-            const mealNames = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', snack: '點心/其他' };
-            mealOrder.forEach(mealType => {
-                const entries = groupedLogs[mealType];
-                if (entries && entries.length > 0) {
-                    const mealSection = document.createElement('div');
-                    mealSection.className = 'mb-4 p-3 bg-white dark:bg-gray-700 rounded-md shadow-sm border border-gray-200 dark:border-gray-600';
-                    const mealTitle = document.createElement('h4');
-                    mealTitle.textContent = mealNames[mealType];
-                    mealTitle.className = 'font-semibold text-lg mb-2 text-gray-700 dark:text-gray-200';
-                    mealSection.appendChild(mealTitle);
-                    const ul = document.createElement('ul');
-                    ul.className = 'space-y-2';
-                    entries.forEach(log => {
-                        const entry = log.logData;
-                        if (!entry || !entry.nutrients) return;
-                        const li = document.createElement('li');
-                        li.className = 'flex justify-between items-start text-sm border-b pb-1 last:border-b-0 border-gray-200 dark:border-gray-600';
-                        li.innerHTML = `
-                            <div class="text-gray-800 dark:text-gray-200">
-                                <span class="font-medium">${entry.name || '未知食物'}</span> (${entry.quantity || '?'} 克) <br>
-                                <span class="text-xs text-gray-600 dark:text-gray-400">
-                                    熱量: ${(entry.nutrients.calories || 0).toFixed(1)} 大卡,
-                                    碳水: ${(entry.nutrients.carbs || 0).toFixed(1)}g,
-                                    脂: ${(entry.nutrients.fat || 0).toFixed(1)}g,
-                                    蛋: ${(entry.nutrients.protein || 0).toFixed(1)}g,
-                                    鈉: ${(entry.nutrients.sodium || 0).toFixed(1)}mg,
-                                    糖: ${(entry.nutrients.sugar || 0).toFixed(1)}g
-                                </span>
-                            </div>
-                            <button class="delete-log-entry ml-2 p-1" data-id="${log.id}" aria-label="刪除此紀錄">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                            </button>
-                        `;
-                        ul.appendChild(li);
-                    });
-                    mealSection.appendChild(ul);
-                    mealLogDiv.appendChild(mealSection);
-                }
-            });
-            console.log("餐點紀錄已渲染:", selectedDate);
-        }
+        function renderMealLog() { /* ... (已修改) ... */ }
 
         // --- 工具函式 ---
         function getMealTypeName(mealType) { /* ... */ }
-        // 移除 getUnitFromName 函式，因為不再需要
-        // function getUnitFromName(name) { /* ... */ }
+        // getUnitFromName 已移除
         let messageTimeout;
         function showMessage(text, type = 'success') { /* ... */ }
 
-        // --- 複製貼上未變更的函式 (除了移除 getUnitFromName) ---
+        // --- 複製貼上未變更的函式 ---
         async function initializeFoodDatabase() {
             const count = await db.foods.count();
             if (count === 0) {
@@ -839,7 +737,8 @@
             try { const results = await db.foods.where('name').startsWithIgnoreCase(searchTerm).limit(10).toArray(); if (results.length > 0) { manageFoodResultDiv.classList.add('hidden'); results.forEach(food => { const li = document.createElement('li'); li.textContent = food.name; li.className = 'p-2 border-b last:border-b-0 dark:text-gray-200 manage-food-item'; li.dataset.food = JSON.stringify(food); manageSearchResultsUl.appendChild(li); }); } else { manageFoodResultDiv.textContent = `找不到名稱開頭為 "${searchTerm}" 的食物`; } }
             catch (error) { console.error("管理搜尋食物時發生錯誤:", error); showMessage("搜尋食物資料庫時發生錯誤", "error"); manageFoodResultDiv.textContent = '搜尋時發生錯誤。'; }
         }
-        const debouncedManageFoodSearch = debounce(performManageFoodSearch, 300); // Debounce 處理
+        // *** 確保只有一次宣告 ***
+        const debouncedManageFoodSearch = debounce(performManageFoodSearch, 300);
          function handleManageResultClick(event) {
             const targetLi = event.target.closest('li.manage-food-item'); if (!targetLi) return;
             try { const foodData = JSON.parse(targetLi.dataset.food); showManageFoodEditSection(foodData); manageSearchResultsUl.innerHTML = ''; manageFoodResultDiv.classList.add('hidden'); }
@@ -911,7 +810,6 @@
             console.log("餐點紀錄已渲染:", selectedDate);
         }
         function getMealTypeName(mealType) { const names = { breakfast: '早餐', lunch: '午餐', dinner: '晚餐', snack: '點心/其他' }; return names[mealType] || '未知餐別'; }
-        // 移除 getUnitFromName
         function showMessage(text, type = 'success') { messageBox.textContent = text; messageBox.classList.remove('success', 'error', 'info'); messageBox.classList.add(type, 'show'); clearTimeout(messageTimeout); messageTimeout = setTimeout(() => { messageBox.classList.remove('show'); }, 3000); }
 
         // --- 啟動應用程式 ---
